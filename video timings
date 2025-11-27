@@ -1,0 +1,31 @@
+`timescale 1ns / 1ps
+
+module video_timings #(
+    parameter WIDTH  = 640,
+    parameter H_FP  = 16,
+    parameter H_PW  = 96,
+    parameter H_BP  = 48,
+    parameter H_TOT  = WIDTH + H_FP + H_PW + H_BP,
+    parameter H_bits = $clog2(H_TOT),
+    
+    parameter HEIGHT  = 480,
+    parameter V_FP  = 10,
+    parameter V_PW  = 2,
+    parameter V_BP  = 33,
+    parameter V_TOT  = HEIGHT + V_FP + V_PW + V_BP,
+    parameter V_bits = $clog2(V_TOT)
+    )
+    (
+    input wire iClk, iRst,
+    output wire [H_bits-1:0] oCountH,
+    output wire [V_bits-1:0] oCountV,
+    output wire oHS, oVS
+    );
+    
+    wire w1;
+    counter_enable #(.LIM(H_TOT)) Horizontal_Counter (.iClk(iClk), .iRst(iRst), .iEnable(1), .oQ(oCountH));
+    assign oHS = ~(oCountH>=(WIDTH+H_FP) && oCountH<(WIDTH+H_FP+H_PW)); 
+    assign w1=(oCountH==H_TOT-1) ? 1:0;
+    counter_enable #(.LIM(V_TOT)) Vertical_Counter (.iClk(iClk), .iRst(iRst), .iEnable(w1), .oQ(oCountV));
+    assign oVS = ~(oCountV>=(HEIGHT+V_FP) && oCountV<(HEIGHT+V_FP+V_PW)); 
+endmodule
