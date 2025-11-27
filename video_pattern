@@ -1,0 +1,43 @@
+`timescale 1ns / 1ps
+
+module video_pattern #(
+    parameter WIDTH  = 640,
+    parameter H_FP   = 16,
+    parameter H_PW   = 96,
+    parameter H_BP   = 48,
+    parameter H_TOT  = WIDTH + H_FP + H_PW + H_BP,
+    parameter H_bits = $clog2(H_TOT),
+    
+    parameter HEIGHT  = 480,
+    parameter V_FP    = 10,
+    parameter V_PW    = 2,
+    parameter V_BP    = 33,
+    parameter V_TOT   = HEIGHT + V_FP + V_PW + V_BP,
+    parameter V_bits  = $clog2(V_TOT)
+    )
+    (
+    input wire [H_bits-1:0] iCountH, 
+    input wire [V_bits-1:0] iCountV,
+    output wire [7:0] oGreen, oBlue, oRed,
+    output wire oActive
+    );
+
+    localparam SQ_SIZE = 100; // Square is 200x200 pixels
+
+    localparam X_START = (WIDTH - SQ_SIZE) / 2; 
+    localparam X_END   = X_START + SQ_SIZE;
+
+    localparam Y_START = (HEIGHT - SQ_SIZE) / 2;
+    localparam Y_END   = Y_START + SQ_SIZE;
+
+    wire in_square;
+    assign in_square = (iCountH >= X_START && iCountH < X_END) && 
+                       (iCountV >= Y_START && iCountV < Y_END);
+
+    assign oActive = (iCountH < WIDTH && iCountV < HEIGHT);
+
+    assign oRed   = (oActive && in_square) ? 8'd255 : 8'd0;
+    assign oGreen = 8'd0;
+    assign oBlue  = 8'd0;
+
+endmodule
