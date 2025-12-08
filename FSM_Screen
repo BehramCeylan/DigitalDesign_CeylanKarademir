@@ -1,0 +1,156 @@
+`timescale 1ns / 1ps
+
+module FSM_screen(
+    input iClk,
+    input iRst,
+    input iPushUp, iPushDown, iPushLeft, iPushRight, // Butonlar
+    input iSwitch,                                   // Şekil değiştirme switch'i (M19 / SW1)
+    
+    output [9:0] oShapeX,
+    output [9:0] oShapeY,
+    output [9:0] oShapeSize,
+    output reg [1:0] oShapeType,      // 0: Kırmızı Kare, Diğerleri: Random Renk/Şekil
+    output reg [14:0] oCoinsActive,   // Hangi coinler sahnede?
+    output [3:0] oLED                 // Skor LED'leri
+    );
+
+    // --- 1. AYARLAR ve BAŞLANGIÇ KONUMU ---
+    // Orta-Sol duvari (Wall 3: Y=200) hemen uzerinde baslamasi icin:
+    localparam START_X = 220; 
+    localparam START_Y = 150; 
+    
+    localparam SIZE    = 20;         
+    localparam SPEED   = 2;          
+    localparam MOVEMENT_DELAY = 250_000; 
+
+    // Registerlar
+    reg [9:0] rX, rY;
+    reg [3:0] rScore;
+    reg [31:0] timer; 
+    
+    // Coin Koordinatları
+    reg [9:0] coinX [0:14];
+    reg [9:0] coinY [0:14];
+    
+    // Rastgelelik icin
+    reg [1:0] rand_counter; 
+    reg [1:0] captured_color; // Switch acildiginda rengi hafizaya almak icin
+    reg switch_prev;          // Switch'in onceki durumu (Kenar algilama icin)
+
+    // Çıkış Atamaları
+    assign oShapeX = rX;
+    assign oShapeY = rY;
+    assign oShapeSize = SIZE;
+    assign oLED = rScore; 
+
+    // --- COIN KONUMLARI ---
+// --- COIN KONUMLARI (GÜNCEL: SOL AĞIRLIKLI) ---
+    integer k;
+    initial begin
+        // --- 1. Sol Koridor (İstek Üzerine Dolduruldu) ---
+        // Duvar 1'in (X=150) solu
+        coinX[0] = 50;  coinY[0] = 50;  // Sol Üst Köşe
+        coinX[1] = 50;  coinY[1] = 400; // Sol Alt Köşe
+        coinX[2] = 50;  coinY[2] = 220; // Sol Orta (Eskiden sağdaydı)
+        coinX[3] = 100; coinY[3] = 100; // Sol Koridor Üst (Sağ alttan geldi)
+        coinX[4] = 100; coinY[4] = 300; // Sol Koridor Alt (Merkezden geldi)
+        coinX[5] = 120; coinY[5] = 200; // Sol Ara Bölge
+
+        // --- 2. Diğer Bölgeler (Dağıtık ve Çarpışmasız) ---
+        coinX[6] = 580; coinY[6] = 50;  // Sağ Üst (Uzak hedef)
+        coinX[7] = 580; coinY[7] = 250; // Sağ Kenar
+        
+        // Labirentin odalarına tek tek koyalım (Loop yerine elle yazdım)
+        coinX[8]  = 250; coinY[8]  = 80;  // Üst Boşluk
+        coinX[9]  = 380; coinY[9]  = 150; // Orta Üst
+        coinX[10] = 520; coinY[10] = 380; // Sağ Alt Geniş Alan (Köşe değil)
+        coinX[11] = 250; coinY[11] = 380; // Alt Koridor
+        coinX[12] = 400; coinY[12] = 250; // Sağ Taraf
+        coinX[13] = 300; coinY[13] = 420; // En Alt Orta
+        coinX[14] = 200; coinY[14] = 250; // Duvarların Arası
+    end
+
+    // --- NEXT POSITION MANTIĞI ---
+    reg [9:0] next_X, next_Y;
+    always @(*) begin
+        next_X = rX;
+        next_Y = rY;
+        if (iPushUp)    next_Y = rY - SPEED;
+        if (iPushDown)  next_Y = rY + SPEED;
+        if (iPushLeft)  next_X = rX - SPEED;
+        if (iPushRight) next_X = rX + SPEED;
+    end
+
+    // --- DUVAR ÇARPIŞMA FONKSİYONU ---
+    function check_collision;
+        input [9:0] x, y;
+        begin
+            // 1. Kenar Sınırları
+            if (x < 20 || x + SIZE > 620 || y < 20 || y + SIZE > 460) 
+                check_collision = 1;
+            
+            // 2. Labirent Duvarları (Video Pattern ile koordineli)
+            else if ((x < 170 && x + SIZE > 150) && (y < 350)) check_collision = 1; // Duvar 1
+            else if ((x < 470 && x + SIZE > 450) && (y + SIZE > 100)) check_collision = 1; // Duvar 2
+            else if ((x < 300 && x + SIZE > 170) && (y < 220 && y + SIZE > 200)) check_collision = 1; // Duvar 3
+            else if ((x < 450 && x + SIZE > 320) && (y < 320 && y + SIZE > 300)) check_collision = 1; // Duvar 4
+            else if ((x < 340 && x + SIZE > 280) && (y < 140 && y + SIZE > 100)) check_collision = 1; // Duvar 5
+            else check_collision = 0; 
+        end
+    endfunction
+
+    // --- ANA FSM DONGUSU ---
+    integer i;
+    always @(posedge iClk) begin
+        if (iRst) begin
+            rX <= START_X;
+            rY <= START_Y;
+            timer <= 0;
+            oCoinsActive <= 15'b111_1111_1111_1111; 
+            rScore <= 0;
+            
+            oShapeType <= 0;
+            rand_counter <= 0;
+            switch_prev <= 0;
+            captured_color <= 0;
+            
+        end else begin
+            
+            // 1. Rastgelelik Mantigi (Switch Kontrolu)
+            rand_counter <= rand_counter + 1; // Surekli sayar (0-1-2-3-0...)
+            switch_prev <= iSwitch;           // Switch durumunu kaydet
+            
+            if (iSwitch && !switch_prev) begin 
+                // Rising Edge: Switch KAPALI'dan ACIK duruma gectigi an
+                captured_color <= rand_counter; // O anki sayiyi yakala
+            end
+            
+            // Eger Switch aciksa yakalanan rengi goster, kapaliysa varsayilan (0)
+            oShapeType <= (iSwitch) ? captured_color : 2'b00;
+
+
+            // 2. Hareket Zamanlayicisi
+            if (timer < MOVEMENT_DELAY) begin
+                timer <= timer + 1;
+            end else begin
+                timer <= 0;
+                // X ve Y eksenlerini ayri ayri kontrol et (Surtunme mantigi)
+                if (!check_collision(next_X, rY)) rX <= next_X; 
+                if (!check_collision(rX, next_Y)) rY <= next_Y; 
+            end
+
+            // 3. Coin Toplama
+            for (i = 0; i < 15; i = i + 1) begin
+                if (oCoinsActive[i]) begin 
+                    if (rX < coinX[i] + 15 && rX + SIZE > coinX[i] &&
+                        rY < coinY[i] + 15 && rY + SIZE > coinY[i]) begin
+                        oCoinsActive[i] <= 0; 
+                        rScore <= rScore + 1; 
+                    end
+                end
+            end
+
+        end
+    end
+
+endmodule
