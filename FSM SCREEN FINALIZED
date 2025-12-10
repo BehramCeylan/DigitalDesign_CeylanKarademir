@@ -9,42 +9,62 @@ module FSM_screen(
     output [9:0] oShapeX,
     output [9:0] oShapeY,
     output [9:0] oShapeSize,
-    output reg [1:0] oShapeType,      
-    output reg [3:0] oCoinsActive,    
-    output reg [3:0] oLED,            // Normal LEDler
-    output reg [5:0] oRGB             // RGB LEDler
+    output reg [1:0] oShapeColor,      
+    output reg [3:0] oCoinsActive,     
+    output reg [3:0] oLED,            //score
+    output reg [5:0] oRGB             //PARTY MODE!!!
     );
-
-    // --- AYARLAR ---
+    
     localparam START_X = 220; 
     localparam START_Y = 150; 
     localparam SIZE    = 20;         
     localparam SPEED   = 2;          
     localparam MOVEMENT_DELAY = 250_000; 
 
-    // Registerlar
     reg [9:0] rX, rY;
     reg [2:0] rScore; 
     reg [31:0] timer; 
     reg [25:0] party_timer; 
     
-    // Coin Koordinatları
     reg [9:0] coinX [0:3];
     reg [9:0] coinY [0:3];
-    
-    // Rastgelelik
+
     reg [1:0] rand_counter; 
     reg [1:0] captured_color; 
     reg switch_prev;          
 
-    // Çıkışlar
     assign oShapeX = rX;
     assign oShapeY = rY;
     assign oShapeSize = SIZE;
-    
-    // LED ve RGB Mantığı
+    //states
+    localparam ST_IDLE  = 3'd0;
+    localparam ST_UP    = 3'd1;
+    localparam ST_DOWN  = 3'd2;
+    localparam ST_LEFT  = 3'd3;
+    localparam ST_RIGHT = 3'd4;
+
+    reg [2:0] state, next_state;
+
+    always @(posedge iClk) begin
+        if (iRst) 
+            state <= ST_IDLE;
+        else 
+            state <= next_state;
+    end
+
+    // next state logic
     always @(*) begin
-        // Normal Skor LED'leri
+        next_state = ST_IDLE; // Default
+        
+        // up over down over left over right
+        if (iPushUp)         next_state = ST_UP;
+        else if (iPushDown)  next_state = ST_DOWN;
+        else if (iPushLeft)  next_state = ST_LEFT;
+        else if (iPushRight) next_state = ST_RIGHT;
+        else                 next_state = ST_IDLE;
+    end
+
+    always @(*) begin
         case (rScore)
             0: oLED = 4'b0000;
             1: oLED = 4'b0001;
@@ -54,20 +74,20 @@ module FSM_screen(
             default: oLED = 4'b0000;
         endcase
 
-        // Pavyon Modu (RGB)
         if (rScore == 4) begin
             case (party_timer[25:24]) 
-                2'b00: oRGB = 6'b100_100; // Kırmızı
-                2'b01: oRGB = 6'b010_010; // Yeşil
-                2'b10: oRGB = 6'b001_001; // Mavi
-                2'b11: oRGB = 6'b101_101; // Mor
+                2'b00: oRGB = 6'b100100; // red
+                2'b01: oRGB = 6'b010010; // green
+                2'b10: oRGB = 6'b001001; // blue
+                2'b11: oRGB = 6'b101101; // magenta
             endcase
-        end else begin
-            oRGB = 6'b000_000; 
+        end 
+        else 
+        begin
+            oRGB = 6'b000000; 
         end
     end
 
-    // Coin Konumları
     initial begin
         coinX[0] = 50;  coinY[0] = 50;   
         coinX[1] = 50;  coinY[1] = 400;  
@@ -75,101 +95,101 @@ module FSM_screen(
         coinX[3] = 580; coinY[3] = 400;  
     end
 
-    // --- YENİ BÖLÜM: NEXT POSITION VE COLLISION LOGIC ---
-    // Function yerine logic değişkenleri (flag) kullanıyoruz
     reg [9:0] next_X, next_Y;
-    reg collision_X_axis; // X yönünde duvara çarptık mı?
-    reg collision_Y_axis; // Y yönünde duvara çarptık mı?
+    reg collision_X_axis; 
+    reg collision_Y_axis; 
 
     always @(*) begin
-        // 1. Önce nereye gitmek istediğimizi hesaplayalım
+        // default: same pos
         next_X = rX; 
         next_Y = rY;
-        
-        if (iPushUp)    next_Y = rY - SPEED;
-        if (iPushDown)  next_Y = rY + SPEED;
-        if (iPushLeft)  next_X = rX - SPEED;
-        if (iPushRight) next_X = rX + SPEED;
 
-        // 2. X Ekseni İçin Çarpışma Kontrolü
-        // (Burada next_X ile rY'yi kontrol ediyoruz)
-        collision_X_axis = 0; // Varsayılan: Çarpışma yok
+        case (state)
+            ST_UP:    next_Y = rY - SPEED;
+            ST_DOWN:  next_Y = rY + SPEED;
+            ST_LEFT:  next_X = rX - SPEED;
+            ST_RIGHT: next_X = rX + SPEED;
+            // ST_IDLE: do nothing
+        endcase
         
-        // Kenarlar
+        //collision Logic
+        collision_X_axis = 0; // assume no collisions
+        
+        // borders
         if (next_X < 20 || next_X + SIZE > 620 || rY < 20 || rY + SIZE > 460) 
             collision_X_axis = 1;
-        // Duvar 1 (Sol Dikey)
+        // wall 1-left
         else if ((next_X < 170 && next_X + SIZE > 150) && (rY < 350)) 
             collision_X_axis = 1;
-        // Duvar 2 (Sağ Dikey)
+        // wall 2-right
         else if ((next_X < 470 && next_X + SIZE > 450) && (rY + SIZE > 100)) 
             collision_X_axis = 1;
-        // Duvar 3 (Orta Sol)
+        // wall 3-mid left
         else if ((next_X < 300 && next_X + SIZE > 170) && (rY < 220 && rY + SIZE > 200)) 
             collision_X_axis = 1;
-        // Duvar 4 (Orta Sağ)
+        // wall 4-mid right
         else if ((next_X < 450 && next_X + SIZE > 320) && (rY < 320 && rY + SIZE > 300)) 
             collision_X_axis = 1;
-        // Duvar 5 (Kutu)
+        // wall 5-mid box
         else if ((next_X < 340 && next_X + SIZE > 280) && (rY < 140 && rY + SIZE > 100)) 
             collision_X_axis = 1;
 
 
-        // 3. Y Ekseni İçin Çarpışma Kontrolü
-        // (Burada rX ile next_Y'yi kontrol ediyoruz)
-        collision_Y_axis = 0; // Varsayılan: Çarpışma yok
+        collision_Y_axis = 0; // assume no collison
         
-        // Kenarlar (Bu sefer next_Y kullanıyoruz)
+        // borders
         if (rX < 20 || rX + SIZE > 620 || next_Y < 20 || next_Y + SIZE > 460) 
             collision_Y_axis = 1;
-        // Duvar 1
+        // wall 1- left
         else if ((rX < 170 && rX + SIZE > 150) && (next_Y < 350)) 
             collision_Y_axis = 1;
-        // Duvar 2
+        // wall 2 -right
         else if ((rX < 470 && rX + SIZE > 450) && (next_Y + SIZE > 100)) 
             collision_Y_axis = 1;
-        // Duvar 3
+        // wall 3- mid left
         else if ((rX < 300 && rX + SIZE > 170) && (next_Y < 220 && next_Y + SIZE > 200)) 
             collision_Y_axis = 1;
-        // Duvar 4
+        // wall 4- mid right
         else if ((rX < 450 && rX + SIZE > 320) && (next_Y < 320 && next_Y + SIZE > 300)) 
             collision_Y_axis = 1;
-        // Duvar 5
+        // wall 5- mid box
         else if ((rX < 340 && rX + SIZE > 280) && (next_Y < 140 && next_Y + SIZE > 100)) 
             collision_Y_axis = 1;
     end
 
-    // --- ANA FSM LOOP ---
     integer i;
     always @(posedge iClk) begin
-        if (iRst) begin
+        if (iRst) // initial conditions
+        begin
             rX <= START_X; rY <= START_Y;
             timer <= 0; party_timer <= 0;
             oCoinsActive <= 4'b1111; 
             rScore <= 0;
-            oShapeType <= 0;
+            oShapeColor <= 0;
             rand_counter <= 0; switch_prev <= 0; captured_color <= 0;
             
-        end else begin
-            // Sayaçlar
+        end 
+        else 
+        begin
+            // counters
             party_timer <= party_timer + 1;
             rand_counter <= rand_counter + 1;
 
-            // Switch Logic
+            // switch logic
             switch_prev <= iSwitch;
             if (iSwitch && !switch_prev) captured_color <= rand_counter;
-            oShapeType <= (iSwitch) ? captured_color : 2'b00;
+            oShapeColor <= (iSwitch) ? captured_color : 2'b00;
 
-            // Hareket Güncelleme
+            // movement
             if (timer < MOVEMENT_DELAY) timer <= timer + 1;
             else begin
                 timer <= 0;
-                // Collision bayraklarına bakarak konumu güncelle
+                // check collision
                 if (collision_X_axis == 0) rX <= next_X; 
                 if (collision_Y_axis == 0) rY <= next_Y; 
             end
 
-            // Coin Toplama
+            // coin logic
             for (i = 0; i < 4; i = i + 1) begin
                 if (oCoinsActive[i]) begin 
                     if (rX < coinX[i] + 15 && rX + SIZE > coinX[i] &&
